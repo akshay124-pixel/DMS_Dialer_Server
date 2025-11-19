@@ -17,37 +17,48 @@ exports.clickToCall = async (req, res) => {
     const { leadId } = req.body;
     const userId = req.user.id;
 
-    // Validate lead exists
+    // 1) Lead validate
     const lead = await Entry.findById(leadId);
     if (!lead) {
-      return res.status(404).json({ message: "Lead not found" });
+      return res.status(404).json({ success: false, message: "Lead not found" });
     }
 
-    // Validate lead has phone number
     if (!lead.mobileNumber) {
-      return res.status(400).json({ message: "Lead does not have a phone number" });
+      return res.status(400).json({
+        success: false,
+        message: "Lead does not have a phone number",
+      });
     }
 
-    // Get user with Smartflo mapping
+    // 2) User validate
     const user = await User.findById(userId);
     if (!user || !user.smartfloEnabled || !user.smartfloAgentNumber) {
       return res.status(400).json({
+        success: false,
         message: "User is not mapped to Smartflo agent. Please contact administrator.",
       });
     }
 
-    // Generate custom identifier for tracking
+    if (!process.env.SMARTFLO_DEFAULT_CALLER_ID) {
+      return res.status(500).json({
+        success: false,
+        message: "SMARTFLO_DEFAULT_CALLER_ID is not configured on server",
+      });
+    }
+
     const customIdentifier = `CRM_${leadId}_${Date.now()}`;
 
-    // Initiate call via Smartflo
-    const callResponse = await smartfloClient.clickToCall({
+    // 3) Smartflo API call
+    const payload = {
       agentNumber: user.smartfloAgentNumber,
       destinationNumber: lead.mobileNumber,
       callerId: process.env.SMARTFLO_DEFAULT_CALLER_ID,
       customIdentifier,
-    });
+    };
 
-    // Create call log entry
+    const callResponse = await smartfloClient.clickToCall(payload);
+
+    // 4) Call log save
     const callLog = new CallLog({
       leadId: lead._id,
       userId: user._id,
@@ -62,13 +73,12 @@ exports.clickToCall = async (req, res) => {
 
     await callLog.save();
 
-    // Update lead's call statistics
     lead.totalCallsMade = (lead.totalCallsMade || 0) + 1;
     lead.lastCallDate = new Date();
     lead.lastCallStatus = "initiated";
     await lead.save();
 
-    res.status(200).json({
+    return res.status(200).json({
       success: true,
       message: "Call initiated successfully",
       callLogId: callLog._id,
@@ -76,13 +86,20 @@ exports.clickToCall = async (req, res) => {
       customIdentifier,
     });
   } catch (error) {
-    console.error("Click-to-call error:", error);
-    res.status(500).json({
+    console.error(
+      "Click-to-call error:",
+      error.response?.data || error.message || error
+    );
+
+    return res.status(error.response?.status || 500).json({
+      success: false,
       message: "Failed to initiate call",
+      providerError: error.response?.data || null,
       error: error.message,
     });
   }
 };
+
 
 /**
  * Schedule callback
