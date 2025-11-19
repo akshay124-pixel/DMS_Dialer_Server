@@ -8,7 +8,7 @@ const axios = require("axios");
 
 class SmartfloClient {
   constructor() {
-    this.baseURL = process.env.SMARTFLO_API_BASE_URL || "https://smapi.smartflo.tatacommunications.com";
+    this.baseURL = process.env.SMARTFLO_API_BASE_URL || "https://api-smartflo.tatateleservices.com";
     this.email = process.env.SMARTFLO_EMAIL;
     this.password = process.env.SMARTFLO_PASSWORD;
     this.token = null;
