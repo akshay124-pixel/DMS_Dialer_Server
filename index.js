@@ -1,4 +1,6 @@
-require("dotenv").config();
+if (process.env.NODE_ENV !== "production") {
+  require("dotenv").config();
+}
 const express = require("express");
 const dbconnect = require("./utils/db.connect");
 const cors = require("cors");
@@ -10,11 +12,17 @@ const SmartfloAdminRouter = require("./Router/SmartfloAdminRouter");
 const SmartfloWebhookRouter = require("./Router/SmartfloWebhookRouter");
 const SmartfloAnalyticsRouter = require("./Router/SmartfloAnalyticsRouter");
 const app = express();
-const port = 4000;
+const port = process.env.PORT || 4000;
 
 // CORS options
+const allowedOrigins = (process.env.CORS_ORIGINS || process.env.APP_URL || "").split(",").map((o) => o.trim()).filter((o) => o.length > 0);
 const corsOptions = {
-  origin: process.env.APP_URL,
+  origin: function (origin, callback) {
+    if (!origin) return callback(null, true);
+    if (allowedOrigins.length === 0) return callback(null, true);
+    const ok = allowedOrigins.some((o) => origin === o || (o.startsWith("*") && origin.endsWith(o.slice(1))));
+    callback(ok ? null : new Error("Not allowed by CORS"), ok);
+  },
   methods: "GET,HEAD,PUT,PATCH,POST,DELETE",
   credentials: true,
 };
@@ -37,7 +45,7 @@ app.use("/api/analytics", SmartfloAnalyticsRouter);
 dbconnect()
   .then(() => {
     app.listen(port, () => {
-      console.log(`App listening on port ${port}!`);
+      console.log(`Server listening on port ${port}`);
     });
   })
   .catch((error) => {

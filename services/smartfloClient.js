@@ -8,40 +8,38 @@ const axios = require("axios");
 
 class SmartfloClient {
   constructor() {
-    this.baseURL = process.env.SMARTFLO_API_BASE_URL || "https://api.smartflo.tatatelebusiness.com";
+    this.baseURL = process.env.SMARTFLO_API_BASE_URL || "https://smapi.smartflo.tatacommunications.com";
     this.email = process.env.SMARTFLO_EMAIL;
     this.password = process.env.SMARTFLO_PASSWORD;
     this.token = null;
     this.tokenExpiry = null;
     this.isRefreshing = false;
     this.refreshPromise = null;
+    this.maxRetries = parseInt(process.env.SMARTFLO_MAX_RETRIES || "4", 10);
+    this.retryBaseMs = parseInt(process.env.SMARTFLO_RETRY_BASE_MS || "500", 10);
+    this.timeoutMs = parseInt(process.env.SMARTFLO_TIMEOUT_MS || "10000", 10);
+    this.http = axios.create({ baseURL: this.baseURL, timeout: this.timeoutMs });
   }
 
   /**
    * Login to Smartflo and get access token
    */
   async login() {
-    try {
-      const response = await axios.post(`${this.baseURL}/v1/auth/login`, {
+    const exec = async () => {
+      const response = await this.http.post("/v1/auth/login", {
         email: this.email,
         password: this.password,
       });
-
-      if (response.data && response.data.access_token) {
-        this.token = response.data.access_token;
-        // Set expiry to 5 minutes before actual expiry for safety
-        const expiresIn = response.data.expires_in || 3600;
-        this.tokenExpiry = Date.now() + (expiresIn - 300) * 1000;
-        
-        console.log("Smartflo: Successfully authenticated");
-        return this.token;
-      } else {
-        throw new Error("Invalid response from Smartflo login");
+      if (!response.data || !response.data.access_token) {
+        throw new Error("Smartflo login invalid response");
       }
-    } catch (error) {
-      console.error("Smartflo login error:", error.response?.data || error.message);
-      throw new Error(`Smartflo authentication failed: ${error.response?.data?.message || error.message}`);
-    }
+      this.token = response.data.access_token;
+      const expiresIn = response.data.expires_in || 3600;
+      this.tokenExpiry = Date.now() + (expiresIn - 300) * 1000;
+      console.log("Smartflo login ok");
+      return this.token;
+    };
+    return await this.withRetry(exec, "login");
   }
 
   /**
@@ -80,39 +78,67 @@ class SmartfloClient {
    */
   async makeRequest(method, endpoint, data = null, params = null) {
     await this.ensureValidToken();
-
-    const config = {
-      method,
-      url: `${this.baseURL}${endpoint}`,
-      headers: {
-        Authorization: `Bearer ${this.token}`,
-        "Content-Type": "application/json",
-      },
-    };
-
-    if (data) config.data = data;
-    if (params) config.params = params;
-
-    try {
-      const response = await axios(config);
+    const exec = async () => {
+      const response = await this.http.request({
+        method,
+        url: endpoint,
+        data: data || undefined,
+        params: params || undefined,
+        headers: {
+          Authorization: `Bearer ${this.token}`,
+          "Content-Type": "application/json",
+        },
+      });
       return response.data;
+    };
+    try {
+      return await this.withRetry(exec, `${method} ${endpoint}`);
     } catch (error) {
-      console.error(`Smartflo API error [${method} ${endpoint}]:`, error.response?.data || error.message);
-      
-      // If unauthorized, try refreshing token once
-      if (error.response?.status === 401) {
+      if (error.response && error.response.status === 401) {
         this.token = null;
         this.tokenExpiry = null;
         await this.ensureValidToken();
-        
-        // Retry request
-        config.headers.Authorization = `Bearer ${this.token}`;
-        const retryResponse = await axios(config);
-        return retryResponse.data;
+        return await this.withRetry(exec, `${method} ${endpoint}`);
       }
-      
       throw error;
     }
+  }
+
+  async withRetry(fn, label) {
+    let attempt = 0;
+    let lastErr;
+    while (attempt <= this.maxRetries) {
+      try {
+        return await fn();
+      } catch (err) {
+        lastErr = err;
+        const code = err.code || err.response?.status || "unknown";
+        const retriable = this.isRetriable(err);
+        if (!retriable || attempt === this.maxRetries) {
+          console.error(`Smartflo ${label} failed`, { attempt, code, message: err.message });
+          throw err;
+        }
+        const delay = this.backoffDelay(attempt);
+        console.warn(`Smartflo retry ${label}`, { attempt: attempt + 1, code, delay });
+        await new Promise((r) => setTimeout(r, delay));
+        attempt += 1;
+      }
+    }
+    throw lastErr;
+  }
+
+  isRetriable(err) {
+    if (err.code === "EAI_AGAIN" || err.code === "ENOTFOUND" || err.code === "ECONNRESET" || err.code === "ETIMEDOUT" || err.code === "ECONNABORTED") return true;
+    const status = err.response?.status;
+    if (!status) return true;
+    if (status >= 500 || status === 429) return true;
+    return false;
+  }
+
+  backoffDelay(attempt) {
+    const base = this.retryBaseMs * Math.pow(2, attempt);
+    const jitter = Math.floor(Math.random() * this.retryBaseMs);
+    return base + jitter;
   }
 
   /**

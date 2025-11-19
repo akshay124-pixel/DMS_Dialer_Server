@@ -56,7 +56,14 @@ exports.clickToCall = async (req, res) => {
       customIdentifier,
     };
 
+    console.log("ClickToCall payload", {
+      agentNumber: payload.agentNumber,
+      destinationNumber: payload.destinationNumber,
+      callerId: payload.callerId,
+      customIdentifier,
+    });
     const callResponse = await smartfloClient.clickToCall(payload);
+    console.log("ClickToCall response", callResponse);
 
     // 4) Call log save
     const callLog = new CallLog({
@@ -96,6 +103,7 @@ exports.clickToCall = async (req, res) => {
       message: "Failed to initiate call",
       providerError: error.response?.data || null,
       error: error.message,
+      code: error.code || null,
     });
   }
 };
