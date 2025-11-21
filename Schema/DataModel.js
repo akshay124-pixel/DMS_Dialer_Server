@@ -134,16 +134,6 @@ const EntrySchema = new mongoose.Schema({
     default: 0,
     min: 0,
   },
-  
-  callbackScheduled: {
-    type: Date,
-  },
-  
-  callbackReason: {
-    type: String,
-    trim: true,
-    maxlength: 500,
-  },
 });
 
 EntrySchema.pre("save", function (next) {

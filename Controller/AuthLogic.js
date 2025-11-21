@@ -1,8 +1,6 @@
 const User = require("../Schema/Model");
 const bcrypt = require("bcrypt");
-const { generateToken } = require("../utils/config jwt");
-const jwt = require("jsonwebtoken");
-const secretkey = require("../utils/config cypt");
+const { generateTokenPair, generateToken } = require("../utils/config jwt");
 // Signup Controller
 const Signup = async (req, res) => {
   try {
@@ -64,23 +62,26 @@ const Login = async (req, res) => {
       return res.status(400).json({ message: "Invalid credentials" });
     }
 
-    const payload = {
-      id: user._id.toString(),
-      username: user.username,
+    // Generate token pair (access + refresh)
+    const tokens = generateTokenPair(user);
+
+    console.log("Login: Tokens generated for user:", {
+      id: user._id,
       email: user.email,
       role: user.role,
-    };
-    console.log("Login: Generating token for user:", payload); // Debug log
-    const token = jwt.sign(payload, secretkey, {
-      expiresIn: "1h",
     });
 
     return res.status(200).json({
+      success: true,
       message: "Login successful",
-      token,
+      token: tokens.accessToken, // For backward compatibility
+      accessToken: tokens.accessToken,
+      refreshToken: tokens.refreshToken,
+      expiresIn: tokens.expiresIn,
       user: {
         id: user._id,
         username: user.username,
+        email: user.email,
         role: user.role,
         isAdmin: user.role === "Admin",
         isSuperadmin: user.role === "Superadmin",
@@ -193,4 +194,68 @@ const ChangePassword = async (req, res) => {
   }
 };
 
-module.exports = { Signup, Login, getUserRole, ChangePassword };
+/**
+ * Refresh Token Controller
+ * Generates new access token using refresh token
+ */
+const RefreshToken = async (req, res) => {
+  try {
+    const { refreshToken } = req.body;
+
+    if (!refreshToken) {
+      return res.status(400).json({
+        success: false,
+        message: "Refresh token is required",
+        code: "NO_REFRESH_TOKEN",
+      });
+    }
+
+    // Verify refresh token
+    const { verifyRefreshToken } = require("../utils/config jwt");
+    const verification = verifyRefreshToken(refreshToken);
+
+    if (!verification.valid) {
+      return res.status(401).json({
+        success: false,
+        message: "Invalid or expired refresh token",
+        code: "INVALID_REFRESH_TOKEN",
+      });
+    }
+
+    // Get user from database
+    const user = await User.findById(verification.userId).lean();
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: "User not found",
+        code: "USER_NOT_FOUND",
+      });
+    }
+
+    // Generate new token pair
+    const tokens = generateTokenPair(user);
+
+    console.log("RefreshToken: New tokens generated for user:", {
+      id: user._id,
+      email: user.email,
+    });
+
+    return res.status(200).json({
+      success: true,
+      message: "Token refreshed successfully",
+      token: tokens.accessToken, // For backward compatibility
+      accessToken: tokens.accessToken,
+      refreshToken: tokens.refreshToken,
+      expiresIn: tokens.expiresIn,
+    });
+  } catch (error) {
+    console.error("RefreshToken Error:", error.message);
+    return res.status(500).json({
+      success: false,
+      message: "Failed to refresh token",
+      code: "REFRESH_FAILED",
+    });
+  }
+};
+
+module.exports = { Signup, Login, getUserRole, ChangePassword, RefreshToken };
